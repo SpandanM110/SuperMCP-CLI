@@ -1,0 +1,8 @@
+# Test output (generated *-mcp dirs)
+*-mcp/
+# Dev
+*.log
+.env
+.DS_Store
+node_modules
+.git

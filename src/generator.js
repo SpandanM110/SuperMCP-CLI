@@ -1,0 +1,255 @@
+/**
+ * MCP Code Generator
+ *
+ * Generates production-ready MCP server code from templates with proper
+ * error handling, logging, and Docker support.
+ */
+
+import Handlebars from 'handlebars';
+import fs from 'fs-extra';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import prettier from 'prettier';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+export class MCPGenerator {
+  constructor(options = {}) {
+    this.templateDir = path.join(__dirname, '../templates');
+    this.registerHelpers();
+  }
+
+  registerHelpers() {
+    Handlebars.registerHelper('json', (context) => {
+      return JSON.stringify(context, null, 2);
+    });
+    Handlebars.registerHelper('uppercase', (str) => String(str).toUpperCase());
+    Handlebars.registerHelper('slugify', (str) => {
+      return String(str).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    });
+  }
+
+  async generate(config) {
+    const {
+      serverName,
+      docsUrl,
+      docsData,
+      llmConfig,
+      language = 'typescript',
+      outputDir = process.cwd(),
+      includeDocker = true,
+      preset = 'default',
+    } = config;
+
+    const docsName = this.extractDocsName(docsUrl, serverName);
+    const projectName = serverName.endsWith('-mcp') ? serverName : `${serverName}-mcp`;
+    const projectDir = path.join(outputDir, projectName);
+    await fs.ensureDir(projectDir);
+
+    const templateData = {
+      serverName,
+      projectName,
+      docsName,
+      docsUrl,
+      docsData,
+      llmConfig: llmConfig || {
+        endpoint: 'http://localhost:11434/api/generate',
+        model: 'llama3.2',
+        type: 'ollama',
+      },
+      language,
+      preset,
+      generatedAt: new Date().toISOString(),
+    };
+
+    if (language === 'typescript') {
+      await this.generateTypeScript(projectDir, templateData);
+    } else if (language === 'python') {
+      await this.generatePython(projectDir, templateData);
+    }
+
+    await this.writeContext(projectDir, docsData);
+
+    if (includeDocker) {
+      await this.generateDockerFiles(projectDir, templateData);
+    }
+
+    await this.generateReadme(projectDir, templateData);
+
+    if (preset === 'archestra') {
+      await this.generateArchestraManifest(projectDir, templateData);
+    }
+
+    return projectDir;
+  }
+
+  extractDocsName(docsUrl, serverName) {
+    try {
+      const hostname = new URL(docsUrl).hostname;
+      const name = hostname.replace(/^www\./, '').split('.')[0];
+      return name.charAt(0).toUpperCase() + name.slice(1);
+    } catch {
+      return serverName.replace(/-/g, ' ');
+    }
+  }
+
+  async generateTypeScript(dir, data) {
+    const templates = {
+      'src/index.ts': 'typescript/index.ts.hbs',
+      'src/context-manager.ts': 'typescript/context-manager.ts.hbs',
+      'src/llm-client.ts': 'typescript/llm-client.ts.hbs',
+      'src/types.ts': 'typescript/types.ts.hbs',
+      'src/logger.ts': 'typescript/logger.ts.hbs',
+      'package.json': 'typescript/package.json.hbs',
+      'tsconfig.json': 'typescript/tsconfig.json.hbs',
+      '.env.example': 'typescript/env.example.hbs',
+    };
+
+    for (const [outputPath, templatePath] of Object.entries(templates)) {
+      await this.renderTemplate(
+        templatePath,
+        path.join(dir, outputPath),
+        data,
+        ['.ts', '.js', '.tsx', '.jsx', '.json']
+      );
+    }
+
+    const gitignorePath = path.join(this.templateDir, 'typescript/gitignore.hbs');
+    if (await fs.pathExists(gitignorePath)) {
+      await fs.writeFile(path.join(dir, '.gitignore'), 'node_modules\ndist\n.env\nlogs\n*.log\n');
+    }
+  }
+
+  async generatePython(dir, data) {
+    const templates = {
+      'server.py': 'python/server.py.hbs',
+      'requirements.txt': 'python/requirements.txt.hbs',
+      '.env.example': 'python/env.example.hbs',
+    };
+
+    for (const [outputPath, templatePath] of Object.entries(templates)) {
+      await this.renderTemplate(
+        templatePath,
+        path.join(dir, outputPath),
+        data,
+        []
+      );
+    }
+  }
+
+  async generateDockerFiles(dir, data) {
+    const language = data.language || 'typescript';
+    const dockerfileTemplate =
+      language === 'typescript'
+        ? 'docker/Dockerfile.typescript.hbs'
+        : 'docker/Dockerfile.python.hbs';
+
+    await this.renderTemplate(
+      dockerfileTemplate,
+      path.join(dir, 'Dockerfile'),
+      data,
+      []
+    );
+
+    await this.renderTemplate(
+      'docker/docker-compose.yml.hbs',
+      path.join(dir, 'docker-compose.yml'),
+      data,
+      []
+    );
+
+    await fs.writeFile(
+      path.join(dir, '.dockerignore'),
+      'node_modules\n.git\n.env\n*.log\nlogs\n'
+    );
+  }
+
+  async generateReadme(dir, data) {
+    await this.renderTemplate(
+      'README.md.hbs',
+      path.join(dir, 'README.md'),
+      data,
+      []
+    );
+  }
+
+  async generateArchestraManifest(dir, data) {
+    const manifest = `# Archestra MCP Manifest - ${data.serverName}
+# Generated by Super MCP. Import into Archestra MCP Registry.
+
+name: ${data.serverName}
+transport: stdio
+command: docker
+args:
+  - run
+  - --rm
+  - -i
+  - --network=host
+  - -e
+  - LLM_PROVIDER=\${LLM_PROVIDER:-ollama}
+  - -e
+  - LLM_MODEL=\${LLM_MODEL:-${data.llmConfig?.model || 'llama3.2'}}
+  - -e
+  - OPENAI_API_KEY=\${OPENAI_API_KEY}
+  - -e
+  - ANTHROPIC_API_KEY=\${ANTHROPIC_API_KEY}
+  - -e
+  - GROQ_API_KEY=\${GROQ_API_KEY}
+image: ${data.projectName}:latest
+
+# Build: docker build -t ${data.projectName}:latest .
+`;
+    await fs.writeFile(path.join(dir, 'archestra-manifest.yaml'), manifest);
+  }
+
+  async renderTemplate(templatePath, outputPath, data, formatExtensions = []) {
+    const fullPath = path.join(this.templateDir, templatePath);
+
+    if (!(await fs.pathExists(fullPath))) {
+      throw new Error(`Template not found: ${fullPath}`);
+    }
+
+    const templateContent = await fs.readFile(fullPath, 'utf-8');
+    const compiled = Handlebars.compile(templateContent);
+    let output = compiled(data);
+
+    const ext = path.extname(outputPath);
+    if (formatExtensions.includes(ext)) {
+      try {
+        output = await prettier.format(output, {
+          parser: ext === '.json' ? 'json' : 'typescript',
+          semi: true,
+          singleQuote: true,
+          trailingComma: 'es5',
+        });
+      } catch {
+        // Prettier failed, use raw output
+      }
+    }
+
+    await fs.ensureDir(path.dirname(outputPath));
+    await fs.writeFile(outputPath, output);
+  }
+
+  async writeContext(dir, docsData) {
+    const contextDir = path.join(dir, 'context');
+    await fs.ensureDir(contextDir);
+
+    await fs.writeJson(path.join(contextDir, 'docs.json'), docsData, {
+      spaces: 2,
+    });
+
+    const metadata = {
+      generatedAt: new Date().toISOString(),
+      generatedBy: 'Super MCP',
+      version: '1.0.0',
+      pageCount: docsData?.pageCount || 0,
+      totalWords:
+        docsData?.pages?.reduce((sum, p) => sum + (p.wordCount || 0), 0) || 0,
+    };
+
+    await fs.writeJson(path.join(contextDir, 'metadata.json'), metadata, {
+      spaces: 2,
+    });
+  }
+}

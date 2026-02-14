@@ -1,0 +1,44 @@
+# Multi-stage build for optimized image size
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+COPY package*.json ./
+COPY tsconfig.json ./
+
+RUN npm ci 2>/dev/null || npm install && \
+    npm cache clean --force
+
+COPY src/ ./src/
+COPY context/ ./context/
+
+RUN npm run build 2>/dev/null || npx tsc
+
+# Production stage
+FROM node:20-alpine
+
+WORKDIR /app
+
+RUN apk add --no-cache dumb-init 2>/dev/null || true
+
+RUN addgroup -g 1001 -S mcp 2>/dev/null || true && \
+    adduser -S mcp -u 1001 2>/dev/null || true
+
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/context ./context
+COPY package*.json ./
+
+RUN chown -R mcp:mcp /app 2>/dev/null || true
+
+USER mcp
+
+ENV NODE_ENV=production
+ENV LLM_ENDPOINT=http://host.docker.internal:11434/api/generate
+ENV LLM_MODEL={{llmConfig.model}}
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD node -e "console.log('healthy')" || exit 1
+
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "dist/index.js"]

@@ -1,0 +1,64 @@
+{
+  "name": "super-mcp",
+  "version": "1.0.0",
+  "description": "Generate production-ready MCP servers from docs, OpenAPI, GraphQL & codebases. Multi-URL, private docs, generate_code tool. Local + cloud LLMs (BYOK). Archestra & Claude Desktop ready.",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "super-mcp": "./bin/super-mcp.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "create": "node bin/super-mcp.js create",
+    "test": "node --test"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "llm",
+    "documentation",
+    "code-generation",
+    "ollama",
+    "openai",
+    "anthropic",
+    "claude",
+    "archestra",
+    "byok"
+  ],
+  "author": "Super MCP",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/super-mcp/super-mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/super-mcp/super-mcp/issues"
+  },
+  "homepage": "https://github.com/super-mcp/super-mcp#readme",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "chalk": "^5.3.0",
+    "cheerio": "^1.0.0-rc.12",
+    "commander": "^11.1.0",
+    "fs-extra": "^11.2.0",
+    "handlebars": "^4.7.8",
+    "inquirer": "^9.2.12",
+    "ora": "^8.0.1",
+    "prettier": "^3.2.0",
+    "turndown": "^7.2.0",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "bin",
+    "src",
+    "templates",
+    "README.md"
+  ]
+}

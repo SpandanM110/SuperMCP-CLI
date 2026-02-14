@@ -1,0 +1,14 @@
+export interface DocumentPage {
+  url: string;
+  title: string;
+  content: string;
+  wordCount: number;
+  scrapedAt?: string;
+}
+
+export interface DocsData {
+  pageCount: number;
+  pages: DocumentPage[];
+  scrapedAt: string;
+  baseUrl: string;
+}

@@ -1,0 +1,27 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY server.py ./
+COPY context/ ./context/
+
+RUN useradd -m -u 1001 mcp 2>/dev/null || true && \
+    chown -R mcp:mcp /app 2>/dev/null || true
+
+USER mcp
+
+ENV PYTHONUNBUFFERED=1
+ENV LLM_ENDPOINT=http://host.docker.internal:11434/api/generate
+ENV LLM_MODEL={{llmConfig.model}}
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD python -c "print('healthy')" || exit 1
+
+CMD ["python", "server.py"]

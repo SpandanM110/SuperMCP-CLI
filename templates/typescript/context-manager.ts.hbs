@@ -1,0 +1,83 @@
+import fs from "fs/promises";
+import { logger } from "./logger.js";
+
+interface DocumentPage {
+  url: string;
+  title: string;
+  content: string;
+  wordCount: number;
+}
+
+interface DocsData {
+  pageCount: number;
+  pages: DocumentPage[];
+  scrapedAt: string;
+  baseUrl: string;
+}
+
+export class ContextManager {
+  private docs: DocsData | null = null;
+  private contextPath: string;
+
+  constructor(contextPath: string) {
+    this.contextPath = contextPath;
+  }
+
+  async initialize(): Promise<void> {
+    try {
+      const data = await fs.readFile(this.contextPath, "utf-8");
+      this.docs = JSON.parse(data);
+      logger.info("Documentation loaded", {
+        pages: this.docs?.pageCount,
+        scrapedAt: this.docs?.scrapedAt,
+      });
+    } catch (error) {
+      logger.error("Failed to load documentation", { error });
+      throw new Error("Failed to initialize context manager");
+    }
+  }
+
+  async search(query: string, maxResults: number = 5): Promise<DocumentPage[]> {
+    if (!this.docs) {
+      throw new Error("Context not initialized");
+    }
+
+    const queryLower = query.toLowerCase();
+    const keywords = queryLower.split(/\s+/).filter((k) => k.length > 2);
+
+    const scored = this.docs.pages.map((page) => {
+      const contentLower = (page.title + " " + page.content).toLowerCase();
+
+      let score = 0;
+
+      if (contentLower.includes(queryLower)) {
+        score += 100;
+      }
+
+      for (const keyword of keywords) {
+        const matches = (contentLower.match(new RegExp(keyword, "g")) || []).length;
+        score += matches * 10;
+
+        if (page.title.toLowerCase().includes(keyword)) {
+          score += 50;
+        }
+      }
+
+      return { page, score };
+    });
+
+    return scored
+      .filter((s) => s.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, maxResults)
+      .map((s) => s.page);
+  }
+
+  getPageCount(): number {
+    return this.docs?.pageCount || 0;
+  }
+
+  async refresh(): Promise<void> {
+    await this.initialize();
+  }
+}

@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  {{projectName}}:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: {{projectName}}
+
+    environment:
+      - LLM_ENDPOINT=${LLM_ENDPOINT:-http://host.docker.internal:11434/api/generate}
+      - LLM_MODEL={{llmConfig.model}}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+
+    volumes:
+      - ./context:/app/context:ro
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    restart: unless-stopped
+
+    network_mode: host
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

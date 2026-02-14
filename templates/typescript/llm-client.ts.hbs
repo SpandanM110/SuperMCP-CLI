@@ -1,0 +1,227 @@
+import axios from "axios";
+import { logger } from "./logger.js";
+
+type LLMProvider =
+  | "ollama"
+  | "openai"
+  | "anthropic"
+  | "groq"
+  | "together"
+  | "mistral"
+  | "azure_openai";
+
+interface LLMConfig {
+  provider?: LLMProvider;
+  endpoint?: string;
+  model: string;
+  apiKey?: string;
+  timeout?: number;
+  maxRetries?: number;
+}
+
+const PROVIDER_DEFAULTS: Record<
+  LLMProvider,
+  { endpoint: string; envKey: string }
+> = {
+  ollama: {
+    endpoint: "http://localhost:11434/api/generate",
+    envKey: "",
+  },
+  openai: {
+    endpoint: "https://api.openai.com/v1/chat/completions",
+    envKey: "OPENAI_API_KEY",
+  },
+  anthropic: {
+    endpoint: "https://api.anthropic.com/v1/messages",
+    envKey: "ANTHROPIC_API_KEY",
+  },
+  groq: {
+    endpoint: "https://api.groq.com/openai/v1/chat/completions",
+    envKey: "GROQ_API_KEY",
+  },
+  together: {
+    endpoint: "https://api.together.xyz/v1/chat/completions",
+    envKey: "TOGETHER_API_KEY",
+  },
+  mistral: {
+    endpoint: "https://api.mistral.ai/v1/chat/completions",
+    envKey: "MISTRAL_API_KEY",
+  },
+  azure_openai: {
+    endpoint: "",
+    envKey: "AZURE_OPENAI_KEY",
+  },
+};
+
+export class LLMClient {
+  private config: LLMConfig & { endpoint: string };
+  private provider: LLMProvider;
+
+  constructor(config: LLMConfig) {
+    const provider =
+      (config.provider ||
+        (process.env.LLM_PROVIDER as LLMProvider) ||
+        "ollama") as LLMProvider;
+
+    const defaults = PROVIDER_DEFAULTS[provider];
+    let endpoint =
+      config.endpoint ||
+      process.env.LLM_ENDPOINT ||
+      defaults?.endpoint;
+    if (provider === "azure_openai" && process.env.AZURE_OPENAI_ENDPOINT) {
+      const deployment =
+        config.model || process.env.AZURE_OPENAI_DEPLOYMENT || "gpt-4";
+      endpoint = `${process.env.AZURE_OPENAI_ENDPOINT}/openai/deployments/${deployment}/chat/completions?api-version=2024-02-15-preview`;
+    }
+
+    const apiKey =
+      config.apiKey ||
+      process.env[defaults?.envKey] ||
+      process.env.LLM_API_KEY;
+
+    this.provider = provider;
+    this.config = {
+      timeout: 30000,
+      maxRetries: 3,
+      ...config,
+      endpoint: endpoint || "",
+      model: config.model || process.env.LLM_MODEL || "llama3.2",
+      apiKey,
+    };
+  }
+
+  private isOllama(): boolean {
+    return (
+      this.provider === "ollama" ||
+      this.config.endpoint.includes("11434") ||
+      (this.config.endpoint.includes("/api/generate") &&
+        !this.config.endpoint.includes("/v1/"))
+    );
+  }
+
+  async query(prompt: string): Promise<string> {
+    for (let attempt = 1; attempt <= (this.config.maxRetries || 3); attempt++) {
+      try {
+        if (this.provider === "anthropic") {
+          return await this.queryAnthropic(prompt);
+        }
+        if (this.isOllama()) {
+          return await this.queryOllama(prompt);
+        }
+        return await this.queryOpenAICompatible(prompt);
+      } catch (error) {
+        logger.warn(`LLM query failed (attempt ${attempt})`, { error });
+        if (attempt === this.config.maxRetries) throw error;
+        await new Promise((r) =>
+          setTimeout(r, Math.pow(2, attempt) * 1000)
+        );
+      }
+    }
+    throw new Error("Max retries exceeded");
+  }
+
+  private async queryOllama(prompt: string): Promise<string> {
+    const res = await axios.post(
+      this.config.endpoint,
+      {
+        model: this.config.model,
+        prompt,
+        stream: false,
+        options: { temperature: 0.7, top_p: 0.9 },
+      },
+      { timeout: this.config.timeout }
+    );
+    return res.data.response;
+  }
+
+  private async queryAnthropic(prompt: string): Promise<string> {
+    const res = await axios.post(
+      this.config.endpoint,
+      {
+        model: this.config.model,
+        max_tokens: 4096,
+        messages: [{ role: "user", content: prompt }],
+      },
+      {
+        timeout: this.config.timeout,
+        headers: {
+          "x-api-key": this.config.apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+      }
+    );
+    return res.data.content?.[0]?.text || "";
+  }
+
+  private async queryOpenAICompatible(prompt: string): Promise<string> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (this.config.apiKey) {
+      headers["Authorization"] =
+        this.provider === "azure_openai"
+          ? `api-key ${this.config.apiKey}`
+          : `Bearer ${this.config.apiKey}`;
+    }
+
+    const res = await axios.post(
+      this.config.endpoint,
+      {
+        model: this.config.model,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.7,
+        max_tokens: 4096,
+      },
+      {
+        timeout: this.config.timeout,
+        headers,
+      }
+    );
+    return res.data.choices?.[0]?.message?.content || "";
+  }
+
+  async isOllamaRunning(): Promise<boolean> {
+    if (!this.isOllama()) return true;
+    try {
+      const base = this.config.endpoint.replace("/api/generate", "");
+      const res = await axios.get(`${base}/api/tags`, {
+        timeout: 3000,
+        validateStatus: () => true,
+      });
+      return res.status === 200;
+    } catch {
+      return false;
+    }
+  }
+
+  isCloudConfigured(): boolean {
+    if (this.isOllama()) return true;
+    return !!this.config.apiKey;
+  }
+
+  async testConnection(): Promise<boolean> {
+    if (this.isOllama()) {
+      const running = await this.isOllamaRunning();
+      if (!running) {
+        logger.error("Ollama is not running. Start it with: ollama serve", {
+          endpoint: this.config.endpoint,
+        });
+        return false;
+      }
+    } else if (!this.config.apiKey) {
+      logger.error(
+        `API key required. Set ${PROVIDER_DEFAULTS[this.provider]?.envKey || "LLM_API_KEY"} for ${this.provider}.`,
+        { provider: this.provider }
+      );
+      return false;
+    }
+    try {
+      const r = await this.query("Say 'OK' and nothing else.");
+      return r.toLowerCase().includes("ok");
+    } catch (error) {
+      logger.error("LLM connection test failed", { error });
+      return false;
+    }
+  }
+}

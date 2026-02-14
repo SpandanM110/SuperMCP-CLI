@@ -1,0 +1,30 @@
+const logLevel = process.env.LOG_LEVEL || "info";
+
+const levels: Record<string, number> = {
+  error: 0,
+  warn: 1,
+  info: 2,
+  debug: 3,
+};
+
+export const logger = {
+  level: logLevel,
+  log(level: string, msg: string, meta?: object) {
+    if (levels[level] <= levels[this.level] || levels[level] === undefined) {
+      const out = level === "error" ? console.error : console.log;
+      out(JSON.stringify({ level, msg, ...meta, timestamp: new Date().toISOString() }));
+    }
+  },
+  error(msg: string, meta?: object) {
+    this.log("error", msg, meta);
+  },
+  warn(msg: string, meta?: object) {
+    this.log("warn", msg, meta);
+  },
+  info(msg: string, meta?: object) {
+    this.log("info", msg, meta);
+  },
+  debug(msg: string, meta?: object) {
+    this.log("debug", msg, meta);
+  },
+};
